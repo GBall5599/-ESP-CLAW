@@ -1,3 +1,6 @@
 {
-    "idf.currentSetup": "e:\\ESPIDF\\514\\v5.1.4\\esp-idf"
+    "idf.currentSetup": "E:\\ESPIDF\\551\\v5.5.1\\esp-idf",
+    "idf.espIdfPath": "E:\\ESPIDF\\551\\v5.5.1\\esp-idf",
+    "idf.toolsPath": "E:\\ESPIDF\\551\\Tools_551",
+    "idf.pythonBinPath": "E:\\ESPIDF\\551\\Tools_551\\python_env\\idf5.5_py3.11_env\\Scripts\\python.exe"
 }

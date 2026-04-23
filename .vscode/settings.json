@@ -1,6 +1,8 @@
 {
-    "idf.currentSetup": "E:\\ESPIDF\\551\\v5.5.1\\esp-idf",
-    "idf.espIdfPath": "E:\\ESPIDF\\551\\v5.5.1\\esp-idf",
-    "idf.toolsPath": "E:\\ESPIDF\\551\\Tools_551",
-    "idf.pythonBinPath": "E:\\ESPIDF\\551\\Tools_551\\python_env\\idf5.5_py3.11_env\\Scripts\\python.exe"
+    "idf.espIdfPathWin": "E:\\ESPIDF\\551\\v5.5.1\\esp-idf",
+    "idf.toolsPathWin": "E:\\ESPIDF\\551\\Tools_551",
+    "idf.pythonInstallPath": "E:\\ESPIDF\\551\\Tools_551\\tools\\idf-python\\3.11.2\\python.exe",
+    "idf.gitPathWin": "E:\\ESPIDF\\551\\Tools_551\\tools\\idf-git\\2.39.2\\cmd\\git.exe",
+    "idf.pythonBinPathWin": "E:\\ESPIDF\\551\\Tools_551\\python_env\\idf5.5_py3.11_env\\Scripts\\python.exe",
+    "idf.currentSetup": "e:\\cx_esp32\\v5.5.1\\esp-idf"
 }

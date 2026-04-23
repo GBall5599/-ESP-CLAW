@@ -9,7 +9,8 @@
     "idf.flashType": "UART",
     "idf.portWin": "COM4",
     "idf.openOcdConfigs": [
-        "board/esp32s3-builtin.cfg"
+        "interface/ftdi/esp_ftdi.cfg",
+        "target/esp32s3.cfg"
     ],
     "idf.customExtraVars": {
         "IDF_TARGET": "esp32s3"

@@ -21,19 +21,39 @@ static const char *TAG = "esp32_s3_szp";
 
 /******************************************************************************/
 /***************************  I2C ↓ *******************************************/
+static i2c_master_bus_handle_t i2c_bus_handle = NULL;
+static i2c_master_dev_handle_t qmi8658_dev_handle = NULL;
+static i2c_master_dev_handle_t pca9557_dev_handle = NULL;
+
 esp_err_t bsp_i2c_init(void)
 {
-    i2c_config_t i2c_conf = {
-        .mode = I2C_MODE_MASTER,
+    i2c_master_bus_config_t bus_config = {
+        .i2c_port = BSP_I2C_NUM,
         .sda_io_num = BSP_I2C_SDA,
-        .sda_pullup_en = GPIO_PULLUP_ENABLE,
         .scl_io_num = BSP_I2C_SCL,
-        .scl_pullup_en = GPIO_PULLUP_ENABLE,
-        .master.clk_speed = BSP_I2C_FREQ_HZ
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true,
     };
-    i2c_param_config(BSP_I2C_NUM, &i2c_conf);
+    ESP_RETURN_ON_ERROR(i2c_new_master_bus(&bus_config, &i2c_bus_handle), TAG, "I2C bus init failed");
 
-    return i2c_driver_install(BSP_I2C_NUM, i2c_conf.mode, 0, 0, 0);
+    /* Add QMI8658 IMU device on the bus */
+    i2c_device_config_t qmi8658_cfg = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = QMI8658_SENSOR_ADDR,
+        .scl_speed_hz = BSP_I2C_FREQ_HZ,
+    };
+    ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(i2c_bus_handle, &qmi8658_cfg, &qmi8658_dev_handle), TAG, "QMI8658 add failed");
+
+    /* Add PCA9557 IO expander device on the bus */
+    i2c_device_config_t pca9557_cfg = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = PCA9557_SENSOR_ADDR,
+        .scl_speed_hz = BSP_I2C_FREQ_HZ,
+    };
+    ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(i2c_bus_handle, &pca9557_cfg, &pca9557_dev_handle), TAG, "PCA9557 add failed");
+
+    return ESP_OK;
 }
 /***************************  I2C ↑  *******************************************/
 /*******************************************************************************/
@@ -45,15 +65,14 @@ esp_err_t bsp_i2c_init(void)
 // 读取QMI8658寄存器的值
 esp_err_t qmi8658_register_read(uint8_t reg_addr, uint8_t *data, size_t len)
 {
-    return i2c_master_write_read_device(BSP_I2C_NUM, QMI8658_SENSOR_ADDR,  &reg_addr, 1, data, len, 1000 / portTICK_PERIOD_MS);
+    return i2c_master_transmit_receive(qmi8658_dev_handle, &reg_addr, 1, data, len, -1);
 }
 
 // 给QMI8658的寄存器写值
 esp_err_t qmi8658_register_write_byte(uint8_t reg_addr, uint8_t data)
 {
     uint8_t write_buf[2] = {reg_addr, data};
-
-    return i2c_master_write_to_device(BSP_I2C_NUM, QMI8658_SENSOR_ADDR, write_buf, sizeof(write_buf), 1000 / portTICK_PERIOD_MS);
+    return i2c_master_transmit(qmi8658_dev_handle, write_buf, sizeof(write_buf), -1);
 }
 
 // 初始化qmi8658
@@ -171,15 +190,14 @@ uint8_t qmi8658_fetch_motion(void)
 // 读取PCA9557寄存器的值
 esp_err_t pca9557_register_read(uint8_t reg_addr, uint8_t *data, size_t len)
 {
-    return i2c_master_write_read_device(BSP_I2C_NUM, PCA9557_SENSOR_ADDR,  &reg_addr, 1, data, len, 1000 / portTICK_PERIOD_MS);
+    return i2c_master_transmit_receive(pca9557_dev_handle, &reg_addr, 1, data, len, -1);
 }
 
 // 给PCA9557的寄存器写值
 esp_err_t pca9557_register_write_byte(uint8_t reg_addr, uint8_t data)
 {
     uint8_t write_buf[2] = {reg_addr, data};
-
-    return i2c_master_write_to_device(BSP_I2C_NUM, PCA9557_SENSOR_ADDR, write_buf, sizeof(write_buf), 1000 / portTICK_PERIOD_MS);
+    return i2c_master_transmit(pca9557_dev_handle, write_buf, sizeof(write_buf), -1);
 }
 
 // 初始化PCA9557 IO扩展芯片
@@ -420,8 +438,9 @@ esp_err_t bsp_touch_new(esp_lcd_touch_handle_t *ret_touch)
     };
     esp_lcd_panel_io_handle_t tp_io_handle = NULL;
     esp_lcd_panel_io_i2c_config_t tp_io_config = ESP_LCD_TOUCH_IO_I2C_FT5x06_CONFIG();
+    tp_io_config.scl_speed_hz = 100000; // FT5x06 I2C clock: 100kHz (required by new I2C v2 driver)
 
-    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_i2c((esp_lcd_i2c_bus_handle_t)BSP_I2C_NUM, &tp_io_config, &tp_io_handle), TAG, "");
+    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_i2c(i2c_bus_handle, &tp_io_config, &tp_io_handle), TAG, "");
     ESP_ERROR_CHECK(esp_lcd_touch_new_i2c_ft5x06(tp_io_handle, &tp_cfg, ret_touch));
 
     return ESP_OK;
@@ -750,7 +769,7 @@ esp_codec_dev_handle_t bsp_audio_codec_speaker_init(void)
     const audio_codec_gpio_if_t *gpio_if = audio_codec_new_gpio();
 
     audio_codec_i2c_cfg_t i2c_cfg = {
-        .port = BSP_I2C_NUM,
+        .bus_handle = i2c_bus_handle,
         .addr = ES8311_CODEC_DEFAULT_ADDR,
     };
     const audio_codec_ctrl_if_t *i2c_ctrl_if = audio_codec_new_i2c_ctrl(&i2c_cfg);
@@ -795,7 +814,7 @@ esp_codec_dev_handle_t bsp_audio_codec_microphone_init(void)
     assert(i2s_data_if);
 
     audio_codec_i2c_cfg_t i2c_cfg = {
-        .port = BSP_I2C_NUM,
+        .bus_handle = i2c_bus_handle,
         .addr = 0x82,
     };
     const audio_codec_ctrl_if_t *i2c_ctrl_if = audio_codec_new_i2c_ctrl(&i2c_cfg);

@@ -107,15 +107,39 @@
               <div class="form-grid">
                 <div class="form-group">
                   <label for="wifi_ssid" data-i18n="wifiSsid">Wi-Fi SSID</label>
-                  <input type="text" id="wifi_ssid" name="wifi_ssid" autocomplete="off">
+                  <div class="wifi-ssid-row">
+                    <input type="text" id="wifi_ssid" name="wifi_ssid" autocomplete="off">
+                    <button type="button" id="wifiScanBtn" class="scan-btn" data-i18n="wifiScanBtn">Scan</button>
+                  </div>
                 </div>
                 <div class="form-group">
                   <label for="wifi_password" data-i18n="wifiPassword">Wi-Fi Password</label>
                   <input type="password" id="wifi_password" name="wifi_password" autocomplete="off">
                 </div>
               </div>
+              <div class="wifi-connect-bar" id="wifiConnectBar">
+                <span id="wifiConnectMsg"></span>
+              </div>
             </div>
           </details>
+
+          <!-- Wi-Fi Scan Modal -->
+          <div id="wifiScanModal" class="modal hidden">
+            <div class="modal-content">
+              <div class="modal-header">
+                <h3 data-i18n="wifiScanTitle">Available Networks</h3>
+                <button type="button" id="wifiScanClose" class="modal-close">&times;</button>
+              </div>
+              <div class="modal-body">
+                <div id="wifiScanLoading" class="scan-loading" data-i18n="wifiScanning">Scanning...</div>
+                <div id="wifiScanError" class="scan-error hidden"></div>
+                <ul id="wifiScanList" class="wifi-list"></ul>
+              </div>
+              <div class="modal-footer">
+                <button type="button" id="wifiScanRefresh" class="scan-btn" data-i18n="wifiRefresh">Refresh</button>
+              </div>
+            </div>
+          </div>
 
           <!-- LLM Settings (default open) -->
           <details class="config-section" id="section-llm" open>

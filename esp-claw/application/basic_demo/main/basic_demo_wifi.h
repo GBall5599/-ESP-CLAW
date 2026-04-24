@@ -9,6 +9,7 @@
 #include <stdint.h>
 
 #include "esp_err.h"
+#include "esp_wifi.h"
 
 typedef void (*basic_demo_wifi_state_cb_t)(bool connected, void *user_ctx);
 
@@ -23,3 +24,6 @@ const char *basic_demo_wifi_get_ap_ssid(void);
 const char *basic_demo_wifi_get_ap_ip(void);
 bool basic_demo_wifi_is_ap_active(void);
 const char *basic_demo_wifi_get_mode_string(void);
+
+int basic_demo_wifi_scan(wifi_ap_record_t *aps, int max_count);
+esp_err_t basic_demo_wifi_connect(const char *ssid, const char *password);

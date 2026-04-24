@@ -26,6 +26,16 @@ const strings = {
     sectionWifi: "Wi-Fi Settings",
     wifiSsid: "Wi-Fi SSID",
     wifiPassword: "Wi-Fi Password",
+    wifiScanBtn: "Scan",
+    wifiScanTitle: "Available Networks",
+    wifiScanning: "Scanning...",
+    wifiScanError: "Scan failed",
+    wifiScanEmpty: "No networks found",
+    wifiOpen: "Open",
+    wifiRefresh: "Refresh",
+    wifiConnecting: "Connecting to new Wi-Fi...",
+    wifiConnectOk: "Connected!",
+    wifiConnectFail: "Connection failed",
 
     sectionLlm: "LLM Settings",
     llmProvider: "LLM Provider",
@@ -157,6 +167,16 @@ const strings = {
     sectionWifi: "Wi-Fi 设置",
     wifiSsid: "Wi-Fi 名称 (SSID)",
     wifiPassword: "Wi-Fi 密码",
+    wifiScanBtn: "扫描",
+    wifiScanTitle: "可用 Wi-Fi 网络",
+    wifiScanning: "扫描中...",
+    wifiScanError: "扫描失败",
+    wifiScanEmpty: "未发现网络",
+    wifiOpen: "开放",
+    wifiRefresh: "刷新",
+    wifiConnecting: "正在连接新 Wi-Fi...",
+    wifiConnectOk: "连接成功！",
+    wifiConnectFail: "连接失败",
 
     sectionLlm: "LLM 设置",
     llmProvider: "LLM 提供商",
@@ -468,6 +488,7 @@ function fillConfigForm(data) {
       input.value = data[field];
     }
   });
+  _savedWifiSsid = data.wifi_ssid || "";
   syncProviderPreset();
 }
 
@@ -509,6 +530,151 @@ function applyProviderPreset(presetKey) {
     modelInput.value = llmProviderDefaultModels[presetKey];
   }
   syncProviderPreset();
+}
+
+/* ═══════════════════════════════════════════════════
+   Wi-Fi Scan & Connect
+   ═══════════════════════════════════════════════════ */
+
+function rssiToBars(rssi) {
+  if (rssi >= -50) return "||||";
+  if (rssi >= -60) return "|||";
+  if (rssi >= -70) return "||";
+  return "|";
+}
+
+function authLabel(auth) {
+  if (auth === 0) return "OPEN";
+  if (auth <= 4) return "WPA/WPA2";
+  if (auth === 5) return "WPA2";
+  if (auth >= 7) return "WPA3";
+  return "SECURED";
+}
+
+function renderWifiList(aps) {
+  const list = document.getElementById("wifiScanList");
+  list.innerHTML = "";
+
+  if (!aps || !aps.length) {
+    const li = document.createElement("li");
+    li.className = "wifi-item wifi-empty";
+    li.textContent = t("wifiScanEmpty");
+    list.appendChild(li);
+    return;
+  }
+
+  aps.sort((a, b) => b.rssi - a.rssi);
+  aps.forEach((ap) => {
+    const li = document.createElement("li");
+    li.className = "wifi-item";
+
+    const info = document.createElement("span");
+    info.className = "wifi-item-info";
+    const ssidSpan = document.createElement("span");
+    ssidSpan.className = "wifi-item-ssid";
+    ssidSpan.textContent = ap.ssid || "(hidden)";
+    const meta = document.createElement("span");
+    meta.className = "wifi-item-meta";
+    meta.textContent = rssiToBars(ap.rssi) + " " + authLabel(ap.auth);
+    info.appendChild(ssidSpan);
+    info.appendChild(meta);
+
+    li.appendChild(info);
+    li.addEventListener("click", () => {
+      document.getElementById("wifi_ssid").value = ap.ssid || "";
+      if (ap.auth === 0) {
+        document.getElementById("wifi_password").value = "";
+      } else {
+        document.getElementById("wifi_password").focus();
+      }
+      closeWifiScanModal();
+    });
+    list.appendChild(li);
+  });
+}
+
+function openWifiScanModal() {
+  document.getElementById("wifiScanModal").classList.remove("hidden");
+  document.body.style.overflow = "hidden";
+}
+
+function closeWifiScanModal() {
+  document.getElementById("wifiScanModal").classList.add("hidden");
+  document.body.style.overflow = "";
+}
+
+async function wifiScan() {
+  const loading = document.getElementById("wifiScanLoading");
+  const error = document.getElementById("wifiScanError");
+  const list = document.getElementById("wifiScanList");
+
+  loading.classList.remove("hidden");
+  error.classList.add("hidden");
+  list.innerHTML = "";
+
+  try {
+    const response = await fetch("/api/wifi/scan", { cache: "no-store" });
+    if (!response.ok) throw new Error(t("wifiScanError"));
+    const data = await response.json();
+    renderWifiList(data.aps || []);
+  } catch (err) {
+    error.textContent = err.message || t("wifiScanError");
+    error.classList.remove("hidden");
+  } finally {
+    loading.classList.add("hidden");
+  }
+}
+
+function showWifiConnectMsg(message, isError) {
+  const bar = document.getElementById("wifiConnectBar");
+  const msg = document.getElementById("wifiConnectMsg");
+  msg.textContent = message;
+  bar.classList.remove("success", "error");
+  bar.classList.add(isError ? "error" : "success");
+  bar.classList.add("visible");
+  if (!isError) {
+    setTimeout(() => bar.classList.remove("visible"), 5000);
+  }
+}
+
+async function wifiConnectAndSave() {
+  const ssid = document.getElementById("wifi_ssid").value.trim();
+  const password = document.getElementById("wifi_password").value;
+
+  if (!ssid) {
+    showBanner("configBanner", "SSID is required", true);
+    return;
+  }
+
+  showWifiConnectMsg(t("wifiConnecting"), false);
+
+  try {
+    const response = await fetch("/api/wifi/connect", {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ssid, password }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || t("wifiConnectFail"));
+  } catch (err) {
+    showWifiConnectMsg(err.message, true);
+    return;
+  }
+
+  for (let i = 0; i < 15; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    try {
+      const sr = await fetch("/api/status", { cache: "no-store" });
+      const sd = await sr.json();
+      if (sd.wifi_connected) {
+        showWifiConnectMsg(t("wifiConnectOk"), false);
+        loadStatus();
+        return;
+      }
+    } catch (_) {}
+  }
+  showWifiConnectMsg(t("wifiConnectFail"), true);
 }
 
 /* ═══════════════════════════════════════════════════
@@ -573,17 +739,22 @@ async function reloadWechatFields() {
   });
 }
 
+let _savedWifiSsid = "";
+
 async function saveConfig() {
   const button = document.getElementById("saveConfigButton");
   button.disabled = true;
   hideBanner("configBanner");
+
+  const form = readConfigForm();
+  const ssidChanged = form.wifi_ssid !== _savedWifiSsid && form.wifi_ssid !== "";
 
   try {
     const response = await fetch("/api/config", {
       method: "POST",
       cache: "no-store",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(readConfigForm()),
+      body: JSON.stringify(form),
     });
     const responseText = await response.text();
     let result = {};
@@ -597,8 +768,15 @@ async function saveConfig() {
     }
     if (!response.ok)
       throw new Error(result.error || t("saveError"));
-    showBanner("configBanner", result.message || t("saveSuccess"));
-    syncProviderPreset();
+
+    if (ssidChanged) {
+      showBanner("configBanner", t("saveSuccess") + " " + t("wifiConnecting"));
+      syncProviderPreset();
+      wifiConnectAndSave();
+    } else {
+      showBanner("configBanner", result.message || t("saveSuccess"));
+      syncProviderPreset();
+    }
   } catch (err) {
     showBanner("configBanner", err.message, true);
   } finally {
@@ -1264,6 +1442,17 @@ function bindEvents() {
   initTabs();
 
   document.getElementById("saveConfigButton").addEventListener("click", saveConfig);
+
+  // WiFi scan
+  document.getElementById("wifiScanBtn").addEventListener("click", () => {
+    openWifiScanModal();
+    wifiScan();
+  });
+  document.getElementById("wifiScanClose").addEventListener("click", closeWifiScanModal);
+  document.getElementById("wifiScanRefresh").addEventListener("click", wifiScan);
+  document.getElementById("wifiScanModal").addEventListener("click", (e) => {
+    if (e.target.id === "wifiScanModal") closeWifiScanModal();
+  });
 
   document.getElementById("llm_provider_preset").addEventListener("change", (e) => {
     applyProviderPreset(e.target.value);

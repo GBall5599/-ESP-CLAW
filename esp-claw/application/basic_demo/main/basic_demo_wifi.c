@@ -371,3 +371,82 @@ const char *basic_demo_wifi_get_mode_string(void)
     default:                     return "off";
     }
 }
+
+int basic_demo_wifi_scan(wifi_ap_record_t *aps, int max_count)
+{
+    if (!aps || max_count <= 0) {
+        return 0;
+    }
+
+    wifi_scan_config_t scan_cfg = {
+        .ssid = NULL,
+        .bssid = NULL,
+        .channel = 0,
+        .show_hidden = false,
+    };
+
+    esp_err_t err = esp_wifi_scan_start(&scan_cfg, true);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "WiFi scan failed: %s", esp_err_to_name(err));
+        return 0;
+    }
+
+    uint16_t ap_count = 0;
+    esp_wifi_scan_get_ap_num(&ap_count);
+    if (ap_count == 0) {
+        return 0;
+    }
+
+    uint16_t fetch_count = (ap_count > max_count) ? max_count : ap_count;
+    esp_wifi_scan_get_ap_records(&fetch_count, aps);
+    ESP_LOGI(TAG, "WiFi scan found %d APs (fetched %d)", ap_count, fetch_count);
+    return fetch_count;
+}
+
+esp_err_t basic_demo_wifi_connect(const char *ssid, const char *password)
+{
+    if (!ssid || ssid[0] == '\0') {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (s_reconnect_timer) {
+        esp_timer_stop(s_reconnect_timer);
+    }
+    s_retry_count = 0;
+    s_connected = false;
+    strlcpy(s_ip_addr, "0.0.0.0", sizeof(s_ip_addr));
+    xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
+
+    wifi_config_t sta_cfg = {0};
+    strlcpy((char *)sta_cfg.sta.ssid, ssid, sizeof(sta_cfg.sta.ssid));
+    strlcpy((char *)sta_cfg.sta.password,
+            password ? password : "",
+            sizeof(sta_cfg.sta.password));
+    sta_cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+    sta_cfg.sta.pmf_cfg.capable = true;
+    sta_cfg.sta.pmf_cfg.required = false;
+
+    wifi_mode_t cur_mode;
+    esp_err_t err = esp_wifi_get_mode(&cur_mode);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    if (cur_mode == WIFI_MODE_AP) {
+        ESP_LOGI(TAG, "Hot-switch: AP -> APSTA, target: %s", ssid);
+        s_mode = WIFI_MODE_APSTA_TRYING;
+        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
+        apply_ap_config();
+        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_cfg));
+        ESP_ERROR_CHECK(esp_wifi_start());
+    } else {
+        ESP_LOGI(TAG, "Hot-switch: reconnecting to %s", ssid);
+        s_mode = WIFI_MODE_APSTA_TRYING;
+        esp_wifi_disconnect();
+        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_cfg));
+        ESP_ERROR_CHECK(esp_wifi_connect());
+    }
+
+    s_sta_configured = true;
+    return ESP_OK;
+}

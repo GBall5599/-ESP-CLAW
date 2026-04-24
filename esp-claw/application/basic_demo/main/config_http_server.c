@@ -371,6 +371,97 @@ static esp_err_t config_post_handler(httpd_req_t *req)
 }
 
 /* ═══════════════════════════════════════════════════
+   Wi-Fi Scan + Connect
+   ═══════════════════════════════════════════════════ */
+
+#define WIFI_SCAN_MAX_APS 20
+
+static esp_err_t wifi_scan_handler(httpd_req_t *req)
+{
+    wifi_ap_record_t *aps = malloc(sizeof(wifi_ap_record_t) * WIFI_SCAN_MAX_APS);
+    if (!aps) {
+        httpd_resp_send_500(req);
+        return ESP_ERR_NO_MEM;
+    }
+
+    int count = basic_demo_wifi_scan(aps, WIFI_SCAN_MAX_APS);
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON *arr = cJSON_CreateArray();
+    if (!root || !arr) {
+        free(aps);
+        cJSON_Delete(root);
+        cJSON_Delete(arr);
+        httpd_resp_send_500(req);
+        return ESP_ERR_NO_MEM;
+    }
+    cJSON_AddItemToObject(root, "aps", arr);
+
+    for (int i = 0; i < count; i++) {
+        cJSON *item = cJSON_CreateObject();
+        if (!item) break;
+        cJSON_AddStringToObject(item, "ssid", (const char *)aps[i].ssid);
+        cJSON_AddNumberToObject(item, "rssi", aps[i].rssi);
+        cJSON_AddNumberToObject(item, "auth", aps[i].authmode);
+        cJSON_AddNumberToObject(item, "channel", aps[i].primary);
+        cJSON_AddItemToArray(arr, item);
+    }
+    free(aps);
+
+    char *payload = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!payload) {
+        httpd_resp_send_500(req);
+        return ESP_ERR_NO_MEM;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store, max-age=0");
+    esp_err_t err = httpd_resp_sendstr(req, payload);
+    free(payload);
+    return err;
+}
+
+static esp_err_t wifi_connect_handler(httpd_req_t *req)
+{
+    cJSON *root = NULL;
+    esp_err_t err = parse_json_body(req, &root);
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON body");
+        return err;
+    }
+
+    char ssid[33] = {0};
+    char password[65] = {0};
+    json_read_string(root, "ssid", ssid, sizeof(ssid));
+    json_read_string(root, "password", password, sizeof(password));
+    cJSON_Delete(root);
+
+    if (ssid[0] == '\0') {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing SSID");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    err = basic_demo_wifi_connect(ssid, password);
+    if (err != ESP_OK) {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"Connect failed\"}");
+        return err;
+    }
+
+    basic_demo_settings_t settings;
+    if (basic_demo_settings_load(&settings) == ESP_OK) {
+        strlcpy(settings.wifi_ssid, ssid, sizeof(settings.wifi_ssid));
+        strlcpy(settings.wifi_password, password, sizeof(settings.wifi_password));
+        basic_demo_settings_save(&settings);
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store, max-age=0");
+    return httpd_resp_sendstr(req, "{\"ok\":true,\"message\":\"Connecting...\"}");
+}
+
+/* ═══════════════════════════════════════════════════
    Chat page + API
    ═══════════════════════════════════════════════════ */
 
@@ -1033,6 +1124,8 @@ esp_err_t config_http_server_start(void)
         { .uri = "/api/status", .method = HTTP_GET, .handler = status_handler },
         { .uri = "/api/config", .method = HTTP_GET, .handler = config_get_handler },
         { .uri = "/api/config", .method = HTTP_POST, .handler = config_post_handler },
+        { .uri = "/api/wifi/scan", .method = HTTP_GET, .handler = wifi_scan_handler },
+        { .uri = "/api/wifi/connect", .method = HTTP_POST, .handler = wifi_connect_handler },
         { .uri = "/api/wechat/login/start", .method = HTTP_POST, .handler = wechat_login_start_handler },
         { .uri = "/api/wechat/login/status", .method = HTTP_GET, .handler = wechat_login_status_handler },
         { .uri = "/api/wechat/login/cancel", .method = HTTP_POST, .handler = wechat_login_cancel_handler },

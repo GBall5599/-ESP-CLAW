@@ -354,7 +354,10 @@ esp_err_t app_claw_start(const basic_demo_settings_t *settings)
                             .persist_after_fire = true,
                         }),
                         TAG, "Failed to init scheduler");
-    ESP_RETURN_ON_ERROR(init_memory(settings, &paths), TAG, "Failed to init memory");
+    esp_err_t mem_err = init_memory(settings, &paths);
+    if (mem_err != ESP_OK) {
+        ESP_LOGW(TAG, "Memory init skipped (non-fatal): %s", esp_err_to_name(mem_err));
+    }
     ESP_RETURN_ON_ERROR(init_skills(&paths), TAG, "Failed to init skills");
     ESP_RETURN_ON_ERROR(init_capabilities(settings, &paths), TAG, "Failed to init capabilities");
     ESP_RETURN_ON_ERROR(claw_event_router_register_outbound_binding("qq", "qq_send_message"), TAG, "Failed to bind QQ outbound");

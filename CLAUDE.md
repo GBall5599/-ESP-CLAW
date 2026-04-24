@@ -9,6 +9,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **芯片**: ESP32-S3-WROOM-1-N16R8 (16MB Flash + 8MB Octal PSRAM)
 - **ESP-IDF**: v5.5.1（路径: `E:\ESPIDF\551\v5.5.1\esp-idf`）
 - **工具链**: `E:\ESPIDF\551\Tools_551`
+- **LLM 后端**: DeepSeek-v4-flash（通过 OpenAI Compatible API）
+- **交互方式**: 网页聊天 `http://<设备IP>/chat`
 
 ## 目录结构
 
@@ -18,6 +20,8 @@ ESPCLAW/
 │   ├── application/        # 唯一 IDF 项目入口: application/basic_demo/
 │   ├── components/         # 共享组件库
 │   └── 项目解析.md         # esp-claw 完整解析文档
+├── esp-claw/               # esp-claw 工作副本（实际修改目录）
+│   └── application/basic_demo/  ← IDF 项目根目录
 ├── 14-handheld/            # 立创实战派原始例程 (IDF v5.4.3)
 ├── 14-handheld(new)/       # 已适配 IDF v5.5.1 的例程（板级驱动参考）
 ├── 项目经验总结.md          # 移植经验文档
@@ -25,6 +29,20 @@ ESPCLAW/
 ```
 
 ## 构建命令
+
+### esp-claw 项目（主工作目录）
+
+```bash
+cd esp-claw/application/basic_demo
+idf.py set-target esp32s3
+idf.py build
+idf.py -p COM4 flash monitor
+```
+
+板级配置生成（首次或修改板级 YAML 后）:
+```bash
+idf.py gen-bmgr-config -c ./boards -b esp32_s3_szp
+```
 
 ### 例程项目 (14-handheld(new))
 ```bash
@@ -34,21 +52,23 @@ idf.py build
 idf.py -p COM4 flash monitor
 ```
 
-### esp-claw 项目 (Ref/)
-```bash
-cd Ref/application/basic_demo
-idf.py set-target esp32s3
-idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults" build
-```
+### Windows 构建注意事项
 
-板级配置生成（移植阶段使用）:
-```bash
-idf.py gen-bmgr-config -c ./boards -b <board_name>
+从 Claude Code（Git Bash）中构建时，`idf.py` 会检测到 MSYSTEM 环境变量并拒绝运行。解决方案：使用 `build_helper.bat` 通过 `cmd.exe` 调用：
+
+```bat
+set MSYSTEM=
+set IDF_PATH=e:\ESPIDF\551\v5.5.1\esp-idf
+set IDF_TOOLS_PATH=e:\ESPIDF\551\Tools_551
+set IDF_PYTHON_ENV_PATH=E:\ESPIDF\551\Tools_551\python_env\idf5.5_py3.11_env
+set PYTHONIOENCODING=utf-8
+set PATH=E:\ESPIDF\551\Tools_551\tools\cmake\3.30.2\bin;...;%PATH%
+python %IDF_PATH%\tools\idf.py build
 ```
 
 ## esp-claw 架构
 
-### 组件体系 (Ref/components/)
+### 组件体系 (esp-claw/components/)
 
 **核心模块** (`claw_modules/`):
 - `claw_core` — LLM Agent 引擎，管理请求队列、工具调用循环（最多 20 次迭代）、上下文提供者链
@@ -75,9 +95,26 @@ esp-claw 使用 `esp_board_manager` 组件通过 YAML 文件定义硬件:
 
 现有参考板: `m5stack_cores3`（最接近 SZP，有 I2C 音频编解码器 + SPI LCD + I2C 触摸）。
 
+### SZP 板级设备
+
+| 设备 | 驱动芯片 | 接口 | 板级类型 |
+|------|---------|------|---------|
+| IO 扩展器 | PCA9557 | I2C 0x19 | custom（setup_device.c 中手动初始化） |
+| 音频 DAC | ES8311 | I2C 0x30 + I2S | audio_codec |
+| 音频 ADC | ES7210 | I2C 0x82 + I2S | audio_codec |
+| LCD | ST7789 | SPI, 320x240 | display_lcd (sub_type: spi) |
+| 触摸 | FT5x06 | I2C 0x38 | lcd_touch_i2c |
+| 背光 PWM | LEDC | GPIO42 | ledc (peripheral) |
+
 ### 数据流
 
-用户消息 → IM 能力(QQ/TG/微信/飞书) → event_router → 路由规则匹配 → claw_core 提交 → LLM API → 工具执行(claw_cap_call) → 响应 → event_router 出站绑定 → IM 发送
+用户消息 → IM 能力(QQ/TG/微信/飞书) 或 网页聊天(/chat) → event_router → 路由规则匹配 → claw_core 提交 → LLM API → 工具执行(claw_cap_call) → 响应 → event_router 出站绑定 → IM 发送
+
+### 网页聊天
+
+`config_http_server.c` 中实现了两个 HTTP 端点：
+- `GET /chat` — 返回内嵌 HTML/JS 的聊天页面
+- `POST /api/ask` — 接收 JSON `{"message":"..."}` 调用 `claw_core_submit()` + `claw_core_receive_for()` 获取 LLM 响应
 
 ## 关键注意事项
 
@@ -94,6 +131,14 @@ CONFIG_I2C_SKIP_LEGACY_CONFLICT_CHECK=y
 ### sdkconfig.defaults 编码
 
 所有 sdkconfig.defaults 注释使用英文。IDF 的 Python 工具链在中文 Windows 上用 GBK 编码读取文件，UTF-8 中文字符会导致构建失败。
+
+### gen_bmgr_codes CONFIG 选项
+
+`gen_bmgr_codes` 自动生成的代码引用 `esp_board_manager` 设备/外设子目录的头文件。这些头文件路径只在对应 `CONFIG_ESP_BOARD_*_SUPPORT` 启用时才会加入 INCLUDE_DIRS。必须在 `sdkconfig.defaults` 中显式声明所有需要的 CONFIG 选项，否则 sdkconfig 重新生成后会编译失败。
+
+### cJSON 内存管理
+
+通过 cJSON 解析的字符串（`valuestring`）在 `cJSON_Delete()` 后会失效。如果需要在 cJSON 树释放后继续使用字符串，必须先用 `strdup()` 复制。
 
 ### SZP 硬件引脚 (BSP 参考: 14-handheld(new)/main/esp32_s3_szp.h)
 

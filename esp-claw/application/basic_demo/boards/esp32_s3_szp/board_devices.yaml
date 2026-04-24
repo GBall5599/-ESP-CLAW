@@ -45,7 +45,7 @@ devices:
     peripherals:
       - name: i2s_audio_in
       - name: i2c_master
-        address: 0x80
+        address: 0x82
         frequency: 100000
 
   # LCD Display (ST7789, SPI, 320x240)

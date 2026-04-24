@@ -16,6 +16,7 @@
 #include "basic_demo_settings.h"
 #include "basic_demo_wifi.h"
 #include "cap_im_wechat.h"
+#include "claw_core.h"
 #include "cJSON.h"
 #include "esp_check.h"
 #include "esp_heap_caps.h"
@@ -367,6 +368,168 @@ static esp_err_t config_post_handler(httpd_req_t *req)
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store, max-age=0");
     return httpd_resp_sendstr(req, "{\"ok\":true,\"message\":\"Saved. Restart the device to apply Wi-Fi and core LLM changes.\"}");
+}
+
+/* ═══════════════════════════════════════════════════
+   Chat page + API
+   ═══════════════════════════════════════════════════ */
+
+static const char chat_html[] =
+"<!DOCTYPE html><html lang='zh-CN'><head><meta charset='UTF-8'>"
+"<meta name='viewport' content='width=device-width,initial-scale=1'>"
+"<title>ESP-Claw Chat</title>"
+"<style>"
+"*{box-sizing:border-box;margin:0;padding:0}"
+"body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;"
+"background:#1a1a2e;color:#e0e0e0;height:100vh;display:flex;flex-direction:column}"
+"#header{background:#16213e;padding:12px 16px;font-size:18px;font-weight:600;"
+"border-bottom:1px solid #0f3460;display:flex;align-items:center;gap:8px}"
+"#header span{color:#e94560}"
+"#messages{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px}"
+".msg{max-width:80%;padding:10px 14px;border-radius:12px;line-height:1.5;"
+"word-break:break-word;white-space:pre-wrap;font-size:15px}"
+".msg.user{background:#0f3460;align-self:flex-end;color:#fff}"
+".msg.bot{background:#222244;align-self:flex-start;color:#e0e0e0}"
+".msg.error{background:#3a1010;color:#ff6b6b}"
+".msg.system{background:transparent;color:#888;align-self:center;font-size:13px;text-align:center}"
+"#input-area{padding:12px 16px;background:#16213e;border-top:1px solid #0f3460;"
+"display:flex;gap:8px}"
+"#msg-input{flex:1;padding:10px 14px;border:1px solid #0f3460;border-radius:8px;"
+"background:#1a1a2e;color:#e0e0e0;font-size:15px;resize:none;outline:none}"
+"#msg-input:focus{border-color:#e94560}"
+"#send-btn{padding:10px 20px;background:#e94560;color:#fff;border:none;"
+"border-radius:8px;font-size:15px;cursor:pointer;font-weight:600}"
+"#send-btn:disabled{opacity:0.5;cursor:not-allowed}"
+"#send-btn:hover:not(:disabled){background:#c73e54}"
+"</style></head><body>"
+"<div id='header'>ESP-Claw <span>Chat</span></div>"
+"<div id='messages'></div>"
+"<div id='input-area'>"
+"<textarea id='msg-input' rows='1' placeholder='Type a message...'></textarea>"
+"<button id='send-btn'>Send</button>"
+"</div>"
+"<script>"
+"const msgBox=document.getElementById('messages');"
+"const input=document.getElementById('msg-input');"
+"const btn=document.getElementById('send-btn');"
+"let busy=false;"
+"function addMsg(cls,text){"
+"const d=document.createElement('div');d.className='msg '+cls;"
+"d.textContent=text;msgBox.appendChild(d);msgBox.scrollTop=msgBox.scrollHeight;"
+"}"
+"async function send(){"
+"const text=input.value.trim();if(!text||busy)return;"
+"busy=true;btn.disabled=true;input.value='';addMsg('user',text);"
+"try{"
+"const r=await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},"
+"body:JSON.stringify({message:text})});"
+"const data=await r.json();"
+"if(data.ok)addMsg('bot',data.response);else addMsg('error',data.error||'Error');"
+"}catch(e){addMsg('error','Network error: '+e.message)}"
+"busy=false;btn.disabled=false;input.focus();"
+"}"
+"btn.onclick=send;"
+"input.onkeydown=function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()}};"
+"addMsg('system','Ready. Type a message to start chatting.');"
+"input.focus();"
+"</script></body></html>";
+
+static esp_err_t chat_page_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "text/html");
+    return httpd_resp_send(req, chat_html, sizeof(chat_html) - 1);
+}
+
+static uint32_t s_chat_request_id = 0;
+
+static esp_err_t chat_ask_handler(httpd_req_t *req)
+{
+    if (req->content_len <= 0 || req->content_len > 4096) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid body size");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char *body = calloc(1, req->content_len + 1);
+    if (!body) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
+        return ESP_ERR_NO_MEM;
+    }
+
+    int received = 0;
+    while (received < (int)req->content_len) {
+        int ret = httpd_req_recv(req, body + received, req->content_len - received);
+        if (ret <= 0) {
+            free(body);
+            return (ret == HTTPD_SOCK_ERR_TIMEOUT) ? ESP_ERR_TIMEOUT : ESP_FAIL;
+        }
+        received += ret;
+    }
+
+    cJSON *root = cJSON_Parse(body);
+    free(body);
+    if (!root) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const cJSON *msg_item = cJSON_GetObjectItemCaseSensitive(root, "message");
+    if (!cJSON_IsString(msg_item) || !msg_item->valuestring[0]) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing 'message' field");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char *message = strdup(msg_item->valuestring);
+    cJSON_Delete(root);
+    if (!message) {
+        httpd_resp_send_500(req);
+        return ESP_ERR_NO_MEM;
+    }
+
+    claw_core_request_t request = {
+        .user_text = message,
+        .session_id = "web_chat",
+        .request_id = s_chat_request_id++,
+    };
+
+    esp_err_t err = claw_core_submit(&request, pdMS_TO_TICKS(5000));
+    free(message);
+    if (err != ESP_OK) {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"Submit failed\"}");
+        return err;
+    }
+
+    claw_core_response_t response = {0};
+    err = claw_core_receive_for(request.request_id, &response, pdMS_TO_TICKS(120000));
+    if (err != ESP_OK) {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"Timeout\"}");
+        return err;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store, max-age=0");
+
+    if (response.status == CLAW_CORE_RESPONSE_STATUS_OK && response.text) {
+        cJSON *escaped = cJSON_CreateString(response.text);
+        char *json = cJSON_PrintUnformatted(escaped);
+        cJSON_Delete(escaped);
+        char *resp = NULL;
+        asprintf(&resp, "{\"ok\":true,\"response\":%s}", json);
+        free(json);
+        if (resp) {
+            httpd_resp_sendstr(req, resp);
+            free(resp);
+        } else {
+            httpd_resp_sendstr(req, "{\"ok\":true,\"response\":\"\"}");
+        }
+    } else {
+        httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"LLM error\"}");
+    }
+
+    claw_core_response_free(&response);
+    return ESP_OK;
 }
 
 static esp_err_t wechat_login_persist_if_needed(cap_im_wechat_qr_login_status_t *status)
@@ -855,7 +1018,7 @@ esp_err_t config_http_server_start(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = BASIC_DEMO_HTTP_SERVER_PORT;
     config.ctrl_port = CONFIG_HTTP_CTRL_PORT;
-    config.max_uri_handlers = 16;
+    config.max_uri_handlers = 20;
     config.stack_size = 8192;
     config.uri_match_fn = httpd_uri_match_wildcard;
 
@@ -878,6 +1041,8 @@ esp_err_t config_http_server_start(void)
         { .uri = "/api/files/upload", .method = HTTP_POST, .handler = files_upload_handler },
         { .uri = "/api/files/mkdir", .method = HTTP_POST, .handler = files_mkdir_handler },
         { .uri = "/files/*", .method = HTTP_GET, .handler = file_download_handler },
+        { .uri = "/chat", .method = HTTP_GET, .handler = chat_page_handler },
+        { .uri = "/api/ask", .method = HTTP_POST, .handler = chat_ask_handler },
     };
 
     for (size_t i = 0; i < sizeof(handlers) / sizeof(handlers[0]); ++i) {

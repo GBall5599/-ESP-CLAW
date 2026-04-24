@@ -492,7 +492,7 @@ static esp_err_t chat_ask_handler(httpd_req_t *req)
         .request_id = s_chat_request_id++,
     };
 
-    esp_err_t err = claw_core_submit(&request, pdMS_TO_TICKS(5000));
+    esp_err_t err = claw_core_submit(&request, 5000);
     free(message);
     if (err != ESP_OK) {
         httpd_resp_set_type(req, "application/json");
@@ -501,7 +501,7 @@ static esp_err_t chat_ask_handler(httpd_req_t *req)
     }
 
     claw_core_response_t response = {0};
-    err = claw_core_receive_for(request.request_id, &response, pdMS_TO_TICKS(120000));
+    err = claw_core_receive_for(request.request_id, &response, 120000);
     if (err != ESP_OK) {
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"Timeout\"}");

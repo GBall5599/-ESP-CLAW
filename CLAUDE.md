@@ -104,6 +104,9 @@ esp-claw 使用 `esp_board_manager` 组件通过 YAML 文件定义硬件:
 | 音频 ADC | ES7210 | I2C 0x82 + I2S | audio_codec |
 | LCD | ST7789 | SPI, 320x240 | display_lcd (sub_type: spi) |
 | 触摸 | FT5x06 | I2C 0x38 | lcd_touch_i2c |
+| 摄像头 | GC0308 | DVP, 8-bit, 24MHz XCLK | camera (sub_type: dvp) |
+| SD 卡 | — | SDMMC 1-bit, CMD=48 CLK=47 D0=21 | fs_fat (sub_type: sdmmc) |
+| IMU | QMI8658 | I2C 0x6A | custom（setup_device.c 中初始化） |
 | 背光 PWM | LEDC | GPIO42 | ledc (peripheral) |
 
 ### 数据流
@@ -112,9 +115,11 @@ esp-claw 使用 `esp_board_manager` 组件通过 YAML 文件定义硬件:
 
 ### 网页聊天
 
-`config_http_server.c` 中实现了两个 HTTP 端点：
+`config_http_server.c` 中实现了以下 HTTP 端点：
 - `GET /chat` — 返回内嵌 HTML/JS 的聊天页面
 - `POST /api/ask` — 接收 JSON `{"message":"..."}` 调用 `claw_core_submit()` + `claw_core_receive_for()` 获取 LLM 响应
+- `GET /api/wifi/scan` — 扫描周围 WiFi 热点，返回 JSON 列表
+- `POST /api/wifi/connect` — 热切换 WiFi（接收 JSON `{"ssid":"...", "password":"..."}`）
 
 ## 关键注意事项
 

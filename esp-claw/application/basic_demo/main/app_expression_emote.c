@@ -6,7 +6,6 @@
 
 #include <string.h>
 #include "esp_check.h"
-#include "esp_heap_caps.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_log.h"
@@ -14,6 +13,7 @@
 #include "app_expression_emote.h"
 #include "expression_emote.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "gfx.h"
 #include "display_arbiter.h"
 
@@ -60,6 +60,7 @@ static void app_emote_flush_callback(int x_start, int y_start, int x_end, int y_
                                      const void *data, emote_handle_t handle)
 {
     esp_err_t err = ESP_OK;
+    static int s_flush_count = 0;
 
     if (!s_panel_handle) {
         if (handle) {
@@ -76,6 +77,11 @@ static void app_emote_flush_callback(int x_start, int y_start, int x_end, int y_
     }
 
     err = esp_lcd_panel_draw_bitmap(s_panel_handle, x_start, y_start, x_end, y_end, data);
+    s_flush_count++;
+    if (s_flush_count <= 5 || s_flush_count % 30 == 0) {
+        ESP_LOGI(TAG, "flush #%d: (%d,%d)-(%d,%d) data=%p err=%s",
+                 s_flush_count, x_start, y_start, x_end, y_end, data, esp_err_to_name(err));
+    }
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_lcd_panel_draw_bitmap failed: %s", esp_err_to_name(err));
         if (handle) {
@@ -277,6 +283,7 @@ static esp_err_t app_expression_emote_init(void)
     }
 
     ESP_LOGI(TAG, "Loading emote assets from partition '%s'", EMOTE_ASSETS_PARTITION);
+
     err = emote_mount_and_load_assets(s_emote_handle, &data);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "emote_mount_and_load_assets failed: %s", esp_err_to_name(err));

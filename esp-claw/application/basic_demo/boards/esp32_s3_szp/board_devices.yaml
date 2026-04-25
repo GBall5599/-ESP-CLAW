@@ -55,23 +55,35 @@ devices:
     sub_type: spi
     version: default
     config:
-      mirror_x: false
+      mirror_x: true
       mirror_y: false
+      swap_xy: true
       x_max: 320
       y_max: 240
       invert_color: true
       io_spi_config:
         cs_gpio_num: -1
         dc_gpio_num: 39
-        spi_mode: 0
+        spi_mode: 2
         pclk_hz: 80000000
       lcd_panel_config:
         reset_gpio_num: -1
-        rgb_ele_order: LCD_RGB_ELEMENT_ORDER_BGR
+        rgb_ele_order: LCD_RGB_ELEMENT_ORDER_RGB
         bits_per_pixel: 16
         data_endian: LCD_RGB_DATA_ENDIAN_BIG
+        vendor_config: NULL
     peripherals:
       - name: spi_master
+
+  # Backlight control (LEDC PWM on GPIO42)
+  - name: backlight
+    type: ledc_ctrl
+    version: default
+    config:
+      ledc_name: ledc_backlight
+      default_percent: 100
+    peripherals:
+      - name: ledc_backlight
 
   # Touch Panel (FT5x06, I2C)
   - name: lcd_touch

@@ -5,7 +5,6 @@
  */
 
 #include <string.h>
-#include <math.h>
 #include "esp_log.h"
 #include "esp_check.h"
 #include "driver/i2c_master.h"
@@ -13,8 +12,6 @@
 #include "esp_lcd_touch_ft5x06.h"
 #include "esp_board_manager_includes.h"
 #include "gen_board_device_custom.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 
 static const char *TAG = "SZP_SETUP_DEVICE";
 
@@ -82,6 +79,7 @@ static int io_expander_init(void *config, int cfg_size, void **device_handle)
     }
 
     ESP_LOGI(TAG, "PCA9557 initialized: LCD_CS=LOW, PA_EN=HIGH, DVP_PWDN=LOW");
+
     *device_handle = s_pca9557_handle;
     return ESP_OK;
 }

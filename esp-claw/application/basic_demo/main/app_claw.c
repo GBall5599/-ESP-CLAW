@@ -343,7 +343,7 @@ esp_err_t app_claw_start(const basic_demo_settings_t *settings)
     router_config.rules_path = paths.router_rules_path;
     ESP_RETURN_ON_ERROR(cap_session_mgr_set_session_root_dir(paths.memory_session_root), TAG, "Failed to configure session manager");
     ESP_RETURN_ON_ERROR(claw_event_router_init(&router_config), TAG, "Failed to init event router");
-    ESP_RETURN_ON_ERROR(cap_scheduler_init(&(cap_scheduler_config_t){
+    esp_err_t sched_err = cap_scheduler_init(&(cap_scheduler_config_t){
                             .schedules_path = paths.scheduler_rules_path,
                             .tick_ms = 1000,
                             .max_items = 32,
@@ -352,8 +352,10 @@ esp_err_t app_claw_start(const basic_demo_settings_t *settings)
                             .task_core = tskNO_AFFINITY,
                             .publish_event = claw_event_router_publish,
                             .persist_after_fire = true,
-                        }),
-                        TAG, "Failed to init scheduler");
+                        });
+    if (sched_err != ESP_OK) {
+        ESP_LOGW(TAG, "Scheduler init skipped (non-fatal): %s", esp_err_to_name(sched_err));
+    }
     esp_err_t mem_err = init_memory(settings, &paths);
     if (mem_err != ESP_OK) {
         ESP_LOGW(TAG, "Memory init skipped (non-fatal): %s", esp_err_to_name(mem_err));

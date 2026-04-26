@@ -6,6 +6,7 @@
 
 #include <string.h>
 #include "esp_check.h"
+#include "driver/i2c_master.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_log.h"
@@ -60,7 +61,6 @@ static void app_emote_flush_callback(int x_start, int y_start, int x_end, int y_
                                      const void *data, emote_handle_t handle)
 {
     esp_err_t err = ESP_OK;
-    static int s_flush_count = 0;
 
     if (!s_panel_handle) {
         if (handle) {
@@ -77,17 +77,8 @@ static void app_emote_flush_callback(int x_start, int y_start, int x_end, int y_
     }
 
     err = esp_lcd_panel_draw_bitmap(s_panel_handle, x_start, y_start, x_end, y_end, data);
-    s_flush_count++;
-    if (s_flush_count <= 5 || s_flush_count % 30 == 0) {
-        ESP_LOGI(TAG, "flush #%d: (%d,%d)-(%d,%d) data=%p err=%s",
-                 s_flush_count, x_start, y_start, x_end, y_end, data, esp_err_to_name(err));
-    }
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_lcd_panel_draw_bitmap failed: %s", esp_err_to_name(err));
-        if (handle) {
-            emote_notify_flush_finished(handle);
-        }
-        return;
     }
 
     if (handle) {
@@ -270,6 +261,41 @@ static esp_err_t app_expression_emote_init(void)
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to get board display handles: %s", esp_err_to_name(err));
         return err;
+    }
+
+    /* Re-initialize LCD with proper CS toggle.
+     * The board_manager initializes the ST7789 with CS permanently LOW (via PCA9557),
+     * which prevents the LCD from properly synchronizing SPI after software reset.
+     * Fix: toggle CS HIGH->LOW, then re-send the full init sequence. */
+    {
+        i2c_master_bus_handle_t i2c_bus = NULL;
+        if (esp_board_periph_get_handle("i2c_master", (void **)&i2c_bus) == ESP_OK && i2c_bus) {
+            i2c_master_dev_handle_t pca_dev = NULL;
+            i2c_device_config_t pca_cfg = {
+                .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+                .device_address = 0x19,
+                .scl_speed_hz = 100000,
+            };
+            if (i2c_master_bus_add_device(i2c_bus, &pca_cfg, &pca_dev) == ESP_OK && pca_dev) {
+                uint8_t buf_high[2] = {0x01, 0x03}; /* CS=HIGH */
+                uint8_t buf_low[2]  = {0x01, 0x02}; /* CS=LOW */
+                i2c_master_transmit(pca_dev, buf_high, 2, -1);
+                vTaskDelay(pdMS_TO_TICKS(10));
+                i2c_master_transmit(pca_dev, buf_low, 2, -1);
+                vTaskDelay(pdMS_TO_TICKS(10));
+
+                esp_lcd_panel_reset(s_panel_handle);
+                vTaskDelay(pdMS_TO_TICKS(150));
+                esp_lcd_panel_init(s_panel_handle);
+                esp_lcd_panel_mirror(s_panel_handle, true, false);
+                esp_lcd_panel_swap_xy(s_panel_handle, true);
+                esp_lcd_panel_invert_color(s_panel_handle, true);
+                esp_lcd_panel_disp_on_off(s_panel_handle, true);
+
+                ESP_LOGI(TAG, "LCD re-initialized with CS toggle");
+                i2c_master_bus_rm_device(pca_dev);
+            }
+        }
     }
 
     emote_config_t config = app_emote_get_default_config();

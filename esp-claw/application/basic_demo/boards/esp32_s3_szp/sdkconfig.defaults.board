@@ -16,3 +16,9 @@ CONFIG_SPIRAM_XIP_FROM_PSRAM=n
 
 # Skip I2C legacy conflict check (esp_lcd compiles both v1/v2 I2C drivers)
 CONFIG_I2C_SKIP_LEGACY_CONFLICT_CHECK=y
+
+# Octal PSRAM shares the SPI bus with flash. When flash cache is disabled for
+# NVS/FAT/partition operations, PSRAM becomes inaccessible. Task stacks in PSRAM
+# would trigger an assert. Disable external memory for task stacks so that
+# CLAW_TASK_STACK_PREFER_PSRAM falls back to internal RAM for all claw tasks.
+CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=n

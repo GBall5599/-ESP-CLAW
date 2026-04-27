@@ -47,14 +47,18 @@ static void app_emote_on_owner_changed(display_arbiter_owner_t owner, void *user
 {
     (void)user_ctx;
 
-    if (owner != DISPLAY_ARBITER_OWNER_EMOTE || !s_emote_handle) {
+    if (owner == DISPLAY_ARBITER_OWNER_LUA) {
+        if (s_emote_handle) {
+            emote_deinit(s_emote_handle);
+            s_emote_handle = NULL;
+            /* Wait for pending SPI transactions to drain before Lua uses the bus */
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
         return;
     }
 
-    esp_err_t err = emote_notify_all_refresh(s_emote_handle);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "refresh after owner switch failed: %s", esp_err_to_name(err));
-    }
+    /* When Lua releases display, keep the last drawn content on screen.
+     * Emote will only restart on device reboot. */
 }
 
 static void app_emote_flush_callback(int x_start, int y_start, int x_end, int y_end,
@@ -299,6 +303,7 @@ static esp_err_t app_expression_emote_init(void)
     }
 
     emote_config_t config = app_emote_get_default_config();
+
     ESP_RETURN_ON_ERROR(display_arbiter_set_owner_changed_callback(app_emote_on_owner_changed, NULL),
                         TAG, "register display owner callback failed");
     s_emote_handle = emote_init(&config);

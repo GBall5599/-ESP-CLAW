@@ -27,6 +27,11 @@ display_arbiter_owner_t display_arbiter_get_owner(void);
 bool display_arbiter_is_owner(display_arbiter_owner_t owner);
 esp_err_t display_arbiter_set_owner_changed_callback(display_arbiter_owner_changed_cb_t callback, void *user_ctx);
 
+/* Resume delay for emote reinit after Lua releases display.
+ * 0 = permanent (never resume), default = 5000 ms. */
+void display_arbiter_set_resume_delay(uint32_t delay_ms);
+uint32_t display_arbiter_get_resume_delay(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -29,6 +29,11 @@ static esp_lcd_panel_handle_t s_panel_handle;
 static int s_lcd_width;
 static int s_lcd_height;
 static emote_handle_t s_emote_handle;
+static bool s_lcd_needs_reinit = true;
+
+/* Save last WiFi state for emote reinit restoration */
+static bool s_last_sta_connected = false;
+static char s_last_ap_ssid[64] = {0};
 
 static bool app_emote_should_swap_color(const dev_display_lcd_config_t *lcd_cfg)
 {
@@ -43,29 +48,79 @@ static bool app_emote_should_swap_color(const dev_display_lcd_config_t *lcd_cfg)
     return true;
 }
 
+#define EMOTE_RESUME_DELAY_DEFAULT_MS 5000
+static TaskHandle_t s_emote_reinit_task;
+
+static esp_err_t app_expression_emote_init(void);
+
+static void app_emote_reinit_task_func(void *arg)
+{
+    uint32_t delay_ms = display_arbiter_get_resume_delay();
+    if (delay_ms == 0) {
+        s_emote_reinit_task = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(delay_ms));
+
+    if (!s_emote_handle) {
+        esp_err_t err = app_expression_emote_init();
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "emote reinit failed (fragmented DRAM?), retrying in 2s...");
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            err = app_expression_emote_init();
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "emote reinit failed after retry: %s", esp_err_to_name(err));
+            }
+        }
+    }
+
+    s_emote_reinit_task = NULL;
+    vTaskDelete(NULL);
+}
+
 static void app_emote_on_owner_changed(display_arbiter_owner_t owner, void *user_ctx)
 {
     (void)user_ctx;
 
     if (owner == DISPLAY_ARBITER_OWNER_LUA) {
+        /* Cancel pending reinit if Lua re-acquires before timer fires */
+        if (s_emote_reinit_task) {
+            vTaskDelete(s_emote_reinit_task);
+            s_emote_reinit_task = NULL;
+        }
         if (s_emote_handle) {
+            /* Replace emote's SPI callback BEFORE deinit to prevent use-after-free.
+             * Without this, the SPI ISR would call emote's internal callback with
+             * a freed handle when pending transactions complete, crashing the ISR
+             * and stalling the entire SPI queue. */
+            if (s_io_handle) {
+                esp_lcd_panel_io_callbacks_t nop_cbs = {0};
+                esp_lcd_panel_io_register_event_callbacks(s_io_handle, &nop_cbs, NULL);
+            }
+
             emote_deinit(s_emote_handle);
             s_emote_handle = NULL;
-            /* Wait for pending SPI transactions to drain before Lua uses the bus */
-            vTaskDelay(pdMS_TO_TICKS(100));
+
+            /* Wait for residual SPI transactions to complete with the no-op callback.
+             * Each transaction takes ~100µs; with up to 10 queued, 50ms is ample. */
+            vTaskDelay(pdMS_TO_TICKS(50));
         }
+        /* Reset resume delay to default for this session */
+        display_arbiter_set_resume_delay(EMOTE_RESUME_DELAY_DEFAULT_MS);
         return;
     }
 
-    /* When Lua releases display, keep the last drawn content on screen.
-     * Emote will only restart on device reboot. */
+    if (owner == DISPLAY_ARBITER_OWNER_EMOTE && !s_emote_handle && s_emote_reinit_task == NULL) {
+        xTaskCreate(app_emote_reinit_task_func, "emote_reinit",
+                     12 * 1024, NULL, 3, &s_emote_reinit_task);
+    }
 }
 
 static void app_emote_flush_callback(int x_start, int y_start, int x_end, int y_end,
                                      const void *data, emote_handle_t handle)
 {
-    esp_err_t err = ESP_OK;
-
     if (!s_panel_handle) {
         if (handle) {
             emote_notify_flush_finished(handle);
@@ -80,7 +135,7 @@ static void app_emote_flush_callback(int x_start, int y_start, int x_end, int y_
         return;
     }
 
-    err = esp_lcd_panel_draw_bitmap(s_panel_handle, x_start, y_start, x_end, y_end, data);
+    esp_err_t err = esp_lcd_panel_draw_bitmap(s_panel_handle, x_start, y_start, x_end, y_end, data);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_lcd_panel_draw_bitmap failed: %s", esp_err_to_name(err));
     }
@@ -216,6 +271,14 @@ esp_err_t app_expression_emote_set_status(bool sta_connected, const char *ap_ssi
     const bool ap_present = (ap_ssid != NULL && ap_ssid[0] != '\0');
     const char *idle = sta_connected ? "swim" : "offline";
 
+    /* Save state for emote reinit restoration */
+    s_last_sta_connected = sta_connected;
+    if (ap_ssid) {
+        snprintf(s_last_ap_ssid, sizeof(s_last_ap_ssid), "%s", ap_ssid);
+    } else {
+        s_last_ap_ssid[0] = '\0';
+    }
+
     char msg[96];
     if (sta_connected && ap_present) {
         snprintf(msg, sizeof(msg), "Online * AP: %s", ap_ssid);
@@ -233,6 +296,9 @@ esp_err_t app_expression_emote_set_status(bool sta_connected, const char *ap_ssi
 
 static void app_emote_cleanup(void)
 {
+    /* Do NOT delete s_emote_reinit_task here — if this function is called
+     * from within the reinit task itself (via failed init), self-deletion
+     * corrupts FreeRTOS state. The reinit task manages its own lifecycle. */
     if (s_emote_handle) {
         emote_deinit(s_emote_handle);
         s_emote_handle = NULL;
@@ -267,11 +333,12 @@ static esp_err_t app_expression_emote_init(void)
         return err;
     }
 
-    /* Re-initialize LCD with proper CS toggle.
+    /* Re-initialize LCD with proper CS toggle (first boot only).
      * The board_manager initializes the ST7789 with CS permanently LOW (via PCA9557),
      * which prevents the LCD from properly synchronizing SPI after software reset.
-     * Fix: toggle CS HIGH->LOW, then re-send the full init sequence. */
-    {
+     * Skip on reinit-after-Lua to avoid clearing user content. */
+    if (s_lcd_needs_reinit) {
+        s_lcd_needs_reinit = false;
         i2c_master_bus_handle_t i2c_bus = NULL;
         if (esp_board_periph_get_handle("i2c_master", (void **)&i2c_bus) == ESP_OK && i2c_bus) {
             i2c_master_dev_handle_t pca_dev = NULL;
@@ -281,8 +348,8 @@ static esp_err_t app_expression_emote_init(void)
                 .scl_speed_hz = 100000,
             };
             if (i2c_master_bus_add_device(i2c_bus, &pca_cfg, &pca_dev) == ESP_OK && pca_dev) {
-                uint8_t buf_high[2] = {0x01, 0x03}; /* CS=HIGH */
-                uint8_t buf_low[2]  = {0x01, 0x02}; /* CS=LOW */
+                uint8_t buf_high[2] = {0x01, 0x03};
+                uint8_t buf_low[2]  = {0x01, 0x02};
                 i2c_master_transmit(pca_dev, buf_high, 2, -1);
                 vTaskDelay(pdMS_TO_TICKS(10));
                 i2c_master_transmit(pca_dev, buf_low, 2, -1);
@@ -300,6 +367,14 @@ static esp_err_t app_expression_emote_init(void)
                 i2c_master_bus_rm_device(pca_dev);
             }
         }
+    }
+
+    /* Ensure no ISR callback is registered so esp_lcd_panel_draw_bitmap uses
+     * polling mode (synchronous SPI).  This prevents the SPI transaction queue
+     * from filling up and avoids ESP_ERR_NO_MEM when Lua later takes over. */
+    if (s_io_handle) {
+        esp_lcd_panel_io_callbacks_t nop_cbs = {0};
+        esp_lcd_panel_io_register_event_callbacks(s_io_handle, &nop_cbs, NULL);
     }
 
     emote_config_t config = app_emote_get_default_config();
@@ -322,7 +397,14 @@ static esp_err_t app_expression_emote_init(void)
         return err;
     }
 
-    err = app_expression_emote_set_network_state(false);
+    if (s_lcd_needs_reinit) {
+        /* First boot — WiFi not connected yet */
+        err = app_expression_emote_set_network_state(false);
+    } else {
+        /* Reinit after Lua — restore last known WiFi state */
+        err = app_expression_emote_set_status(s_last_sta_connected,
+                                               s_last_ap_ssid[0] ? s_last_ap_ssid : NULL);
+    }
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "show idle message failed: %s", esp_err_to_name(err));
         app_emote_cleanup();

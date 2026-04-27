@@ -1368,6 +1368,13 @@ static int lua_display_fill_triangle(lua_State *L)
     return 0;
 }
 
+static int lua_display_set_resume_delay(lua_State *L)
+{
+    int seconds = luaL_checkinteger(L, 1);
+    display_arbiter_set_resume_delay((uint32_t)seconds * 1000);
+    return 0;
+}
+
 /* -------------------------------------------------------------------------
  * Module registration
  * ---------------------------------------------------------------------- */
@@ -1473,6 +1480,9 @@ int luaopen_display(lua_State *L)
     lua_setfield(L, -2, "draw_triangle");
     lua_pushcfunction(L, lua_display_fill_triangle);
     lua_setfield(L, -2, "fill_triangle");
+
+    lua_pushcfunction(L, lua_display_set_resume_delay);
+    lua_setfield(L, -2, "set_resume_delay");
 
     return 1;
 }

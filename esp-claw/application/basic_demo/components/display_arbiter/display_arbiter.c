@@ -27,6 +27,8 @@ static display_arbiter_state_t s_state = {
     .owner = DISPLAY_ARBITER_OWNER_EMOTE,
 };
 
+static uint32_t s_resume_delay_ms = 5000;
+
 static esp_err_t display_arbiter_lock(void)
 {
     if (!s_state.lock) {
@@ -166,4 +168,14 @@ esp_err_t display_arbiter_set_owner_changed_callback(display_arbiter_owner_chang
     s_state.callback_user_ctx = user_ctx;
     display_arbiter_unlock();
     return ESP_OK;
+}
+
+void display_arbiter_set_resume_delay(uint32_t delay_ms)
+{
+    s_resume_delay_ms = delay_ms;
+}
+
+uint32_t display_arbiter_get_resume_delay(void)
+{
+    return s_resume_delay_ms;
 }

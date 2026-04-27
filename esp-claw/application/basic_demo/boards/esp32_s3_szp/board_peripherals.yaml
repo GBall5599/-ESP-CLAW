@@ -48,7 +48,7 @@ peripherals:
         spi_port: SPI3_HOST
         mosi_io_num: 40
         sclk_io_num: 41
-        max_transfer_sz: 12800
+        max_transfer_sz: 3200
 
   # LEDC Backlight PWM (GPIO42)
   - name: ledc_backlight
